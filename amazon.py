@@ -1,46 +1,68 @@
-from selectorlib import Extractor
-import requests 
-import json 
-from time import sleep
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import pandas as pd
+import os
+import time
+import random
+from tqdm import tqdm
+from datetime import datetime
 
+def scrape_with_selenium(url):
+    options = Options()
+    options.add_argument('--headless')
+    driver = webdriver.Chrome(options=options)
 
-# Create an Extractor by reading from the YAML file
-e = Extractor.from_yaml_file('selectors.yml')
+    driver.get(url)
 
-def scrape(url):  
+    wait = WebDriverWait(driver, 10)
+    try:
+        price_element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'span.a-price-whole')))
+        price = price_element.text
+    except:
+        price = None
 
-    headers = {
-        'dnt': '1',
-        'upgrade-insecure-requests': '1',
-        'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.61 Safari/537.36',
-        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
-        'sec-fetch-site': 'same-origin',
-        'sec-fetch-mode': 'navigate',
-        'sec-fetch-user': '?1',
-        'sec-fetch-dest': 'document',
-        'referer': 'https://www.amazon.com/',
-        'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
-    }
+    try:
+        name_element = wait.until(EC.presence_of_element_located((By.ID, 'productTitle')))
+        product_name = name_element.text.strip()
+    except:
+        product_name = None
 
-    # Download the page using requests
-    print("Downloading %s"%url)
-    r = requests.get(url, headers=headers)
-    # Simple check to check if page was blocked (Usually 503)
-    if r.status_code > 500:
-        if "To discuss automated access to Amazon data please contact" in r.text:
-            print("Page %s was blocked by Amazon. Please try using better proxies\n"%url)
-        else:
-            print("Page %s must have been blocked by Amazon as the status code was %d"%(url,r.status_code))
-        return None
-    # Pass the HTML of the page and create 
-    return e.extract(r.text)
+    driver.quit()
 
-# product_data = []
-with open("urls.txt",'r') as urllist, open('output.jsonl','w') as outfile:
-    for url in urllist.read().splitlines():
-        data = scrape(url) 
+    return {"product": product_name, "price": price, "url": url}
+
+output_file = "product_data.xlsx"
+
+# Load existing data if the file exists and is valid
+if os.path.exists(output_file):
+    try:
+        df = pd.read_excel(output_file, engine='openpyxl')
+    except Exception as e:
+        print(f"Error reading {output_file}: {e}")
+        df = pd.DataFrame(columns=["date", "time", "product", "price", "url"])
+else:
+    df = pd.DataFrame(columns=["date", "time", "product", "price", "url"])
+
+with open("urls.txt", 'r') as urllist:
+    urls = urllist.read().splitlines()
+    total_urls = len(urls)
+
+    for url in tqdm(urls, total=total_urls, desc="Scraping URLs"):
+        data = scrape_with_selenium(url)
         if data:
-            json.dump(data,outfile)
-            outfile.write("\n")
-            # sleep(5)
-    
+            now = datetime.now()
+            data['date'] = now.date()
+            data['time'] = now.time()
+            new_df = pd.DataFrame([data])
+            df = pd.concat([df, new_df], ignore_index=True)
+        time.sleep(random.uniform(1, 5))  # Random delay between 1 and 5 seconds
+
+# Save the DataFrame to Excel, using openpyxl engine
+try:
+    df.to_excel(output_file, index=False, engine='openpyxl')
+    print(f"Data scraped successfully and saved to {output_file}")
+except Exception as e:
+    print(f"Error writing to {output_file}: {e}")
